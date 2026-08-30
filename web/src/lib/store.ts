@@ -1,8 +1,17 @@
 import { create } from 'zustand';
 import { api, type TreeNode, type ShareRecord } from './api';
-import { findNode } from './tree';
-import { loadDraft, saveDraft } from './drafts';
+import { addDraftAssetToTree, addDraftNoteToTree, findNode, resolveWikilinkPath } from './tree';
+import {
+  forgetCreatedNote,
+  loadCreatedNotes,
+  loadContribution,
+  loadDraft,
+  rememberCreatedNote,
+  saveDraft,
+} from './drafts';
 import { contributionMode } from './mode';
+import { warmDraftAssetUrls } from './draftAssets';
+import { getContributionWorkspace } from './contributionWorkspace';
 
 /** Per-tab id so we can ignore the echo of our own server-pushed state change. */
 export const CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -217,6 +226,20 @@ interface AppState {
 
 const TEXT_RE = /\.(md|markdown|txt|json|csv|canvas|css|js|ya?ml)$/i;
 
+async function readTextContent(path: string): Promise<string> {
+  if (contributionMode) {
+    const draft = loadDraft(path);
+    const workspace = getContributionWorkspace();
+    const contribution = loadContribution(path);
+    const draftMatchesWorkspace = !workspace
+      || (workspace.kind === 'new' && !contribution)
+      || (workspace.kind === 'existing' && contribution?.branch === workspace.review.branch);
+    if (draft !== null && draftMatchesWorkspace) return draft;
+  }
+  const result = await api.read(path);
+  return typeof result === 'string' ? result : result.content;
+}
+
 // ---- server-side workspace persistence (shared across browsers/devices) ----
 const PERSIST_KEYS = [
   'tabs', 'activePath', 'viewMode', 'expanded', 'splitPath', 'splitDirection',
@@ -308,7 +331,19 @@ export const useStore = create<AppState>()(
 
       tree: null,
       loadTree: async () => {
-        const tree = await api.tree();
+        let tree = await api.tree();
+        if (contributionMode) {
+          for (const path of loadCreatedNotes()) {
+            if (loadDraft(path) === null) {
+              forgetCreatedNote(path);
+            } else {
+              tree = addDraftNoteToTree(tree, path);
+            }
+          }
+          for (const asset of await warmDraftAssetUrls()) {
+            tree = addDraftAssetToTree(tree, asset.path);
+          }
+        }
         set({ tree });
       },
 
@@ -363,10 +398,10 @@ export const useStore = create<AppState>()(
       splitDirection: 'right',
       openToSide: async (path, direction) => {
         if (!TEXT_RE.test(path)) return;
-        const r = await api.read(path);
+        const content = await readTextContent(path);
         set((s) => ({
           splitPath: path,
-          splitContent: typeof r === 'string' ? r : r.content,
+          splitContent: content,
           splitDirection: direction ?? s.splitDirection,
         }));
       },
@@ -486,9 +521,7 @@ export const useStore = create<AppState>()(
         const isFolder = findNode(get().tree, path)?.type === 'folder';
         let content = '';
         if (!isFolder && TEXT_RE.test(path)) {
-          const r = await api.read(path);
-          const remoteContent = typeof r === 'string' ? r : r.content;
-          content = contributionMode ? (loadDraft(path) ?? remoteContent) : remoteContent;
+          content = await readTextContent(path);
         }
         const title = path.split('/').pop() ?? path;
         set((s) => {
@@ -500,15 +533,26 @@ export const useStore = create<AppState>()(
 
       openWikilink: async (target) => {
         try {
-          const { path } = await api.resolve(target);
-          if (path) await get().openFile(path);
-          else {
-            // Only append `.md` when the target has no extension at all — a target
-            // like `Foo.canvas` must stay `Foo.canvas`, not become `Foo.canvas.md`.
+          let resolvedPath: string | null = null;
+          if (contributionMode) {
+            // In contribution mode the /api/resolve endpoint does not exist.
+            // Resolve the wikilink target from the in-memory file tree so
+            // Ctrl/Cmd-click navigation works without a server round-trip.
+            resolvedPath = resolveWikilinkPath(get().tree, target);
+          } else {
+            const result = await api.resolve(target);
+            resolvedPath = result.path;
+          }
+          if (resolvedPath) {
+            await get().openFile(resolvedPath);
+          } else if (!contributionMode) {
+            // Keep the standard WebObsidian behavior outside contribution mode:
+            // an unresolved wikilink creates the missing note.
             const hasExt = /\.[^./]+$/.test(target);
             const newPath = hasExt ? target : `${target}.md`;
             await get().createNote(newPath, `# ${target.replace(/\.md$/, '')}\n`);
           }
+          // Contribution mode intentionally skips note creation on a miss.
         } catch {
           /* ignore */
         }
@@ -539,6 +583,23 @@ export const useStore = create<AppState>()(
       },
 
       createNote: async (path, body) => {
+        if (contributionMode) {
+          const tree = get().tree;
+          const segments = path.replaceAll('\\', '/').split('/');
+          const validPath = segments[0]?.toLowerCase() === 'docs'
+            && segments.length >= 2
+            && segments.every((segment) => segment && segment !== '.' && segment !== '..')
+            && /\.(md|markdown)$/i.test(path);
+          if (!tree || !validPath) throw new Error('投稿模式只能在 docs/ 中新建 Markdown 文档');
+          if (findNode(tree, path)) throw new Error('同名文档已经存在');
+          const nextTree = addDraftNoteToTree(tree, path);
+          if (nextTree === tree) throw new Error('只能在现有文件夹中创建文档');
+          saveDraft(path, body ?? '');
+          rememberCreatedNote(path);
+          set({ tree: nextTree });
+          await get().openFile(path);
+          return;
+        }
         await api.write(path, body ?? '');
         await get().loadTree();
         await get().openFile(path);
@@ -546,17 +607,25 @@ export const useStore = create<AppState>()(
 
       newNote: async (dir) => {
         // Pick the first free "Untitled" name in the target folder, like Obsidian.
-        const base = (dir ?? '').replace(/\/+$/, '');
-        const folder = base ? findNode(get().tree, base) : get().tree;
+        const requestedBase = (dir ?? '').replace(/\/+$/, '');
+        const base = contributionMode && !requestedBase
+          ? (get().tree?.path || 'docs')
+          : requestedBase;
+        const folder = base && base !== get().tree?.path ? findNode(get().tree, base) : get().tree;
         const taken = new Set((folder?.children ?? []).map((c) => c.name.toLowerCase()));
         let name = 'Untitled.md';
         for (let i = 1; taken.has(name.toLowerCase()); i++) name = `Untitled ${i}.md`;
         const path = base ? `${base}/${name}` : name;
         await get().createNote(path, '');
+        if (contributionMode) set({ renamingPath: path });
         if (base) get().revealInTree(path);
       },
 
       newCanvas: async (dir) => {
+        if (contributionMode) {
+          get().notify('投稿模式只支持新建 Markdown 文档');
+          return;
+        }
         const base = (dir ?? '').replace(/\/+$/, '');
         const folder = base ? findNode(get().tree, base) : get().tree;
         const taken = new Set((folder?.children ?? []).map((c) => c.name.toLowerCase()));
@@ -571,6 +640,10 @@ export const useStore = create<AppState>()(
       setRenamingPath: (path) => set({ renamingPath: path }),
 
       newFolder: async (dir) => {
+        if (contributionMode) {
+          get().notify('投稿模式暂不支持新建文件夹');
+          return;
+        }
         // Create an "Untitled" folder (unique name) and drop straight into inline
         // rename — same as Obsidian, no prompt.
         const base = (dir ?? '').replace(/\/+$/, '');
@@ -617,8 +690,8 @@ export const useStore = create<AppState>()(
         const { activePath, splitPath, tabs } = get();
         if (activePath && TEXT_RE.test(activePath)) {
           try {
-            const r = await api.read(activePath);
-            set({ content: typeof r === 'string' ? r : r.content, dirty: false });
+            const content = await readTextContent(activePath);
+            set({ content, dirty: false });
           } catch {
             set({
               tabs: tabs.filter((t) => t.path !== activePath),
@@ -629,8 +702,8 @@ export const useStore = create<AppState>()(
         }
         if (splitPath && TEXT_RE.test(splitPath)) {
           try {
-            const r = await api.read(splitPath);
-            set({ splitContent: typeof r === 'string' ? r : r.content });
+            const content = await readTextContent(splitPath);
+            set({ splitContent: content });
           } catch {
             set({ splitPath: null, splitContent: '' });
           }
