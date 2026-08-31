@@ -60,6 +60,15 @@ export function assertWritableContributionImagePath(input: string): string {
   return path;
 }
 
+/** A file or folder path that may be repositioned inside the public docs tree. */
+export function assertContributionMovePath(input: string): string {
+  const path = normalizeRepoPath(input);
+  if (path.toLowerCase() === 'docs' || !path.toLowerCase().startsWith('docs/')) {
+    throw new Error('Contribution move path must stay inside docs');
+  }
+  return path;
+}
+
 export function isReadableTreePath(path: string): boolean {
   const lower = path.toLowerCase();
   return lower === 'docs' || READABLE_ROOTS.some((root) => lower.startsWith(root));

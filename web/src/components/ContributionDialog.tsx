@@ -11,6 +11,7 @@ import {
   selectExistingContribution,
   subscribeContributionWorkspace,
 } from '../lib/contributionWorkspace';
+import { clearContributionMoves, loadContributionMoves } from '../lib/contributionMoves';
 
 interface Props {
   path: string;
@@ -59,6 +60,7 @@ export default function ContributionDialog({ path, onClose, onSubmitted }: Props
             encoding: 'base64' as const,
           }))),
         ],
+        moves: loadContributionMoves(),
         ...(updateBranch ? { branch: updateBranch } : {}),
       });
       localStorage.setItem('uscwiki-editor:contributor-name', contributorName);
@@ -69,6 +71,7 @@ export default function ContributionDialog({ path, onClose, onSubmitted }: Props
         title,
         submittedContent: content,
       });
+      clearContributionMoves();
       selectExistingContribution({
         branch: result.branch,
         pullNumber: result.pullNumber,

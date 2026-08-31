@@ -126,6 +126,25 @@ export async function removeDraftAsset(path: string): Promise<void> {
   objectUrls.delete(path);
 }
 
+export async function moveDraftAsset(from: string, to: string, notePath?: string): Promise<boolean> {
+  const asset = await getDraftAsset(from);
+  if (!asset) return false;
+  const moved = { ...asset, path: to, ...(notePath ? { notePath } : {}) };
+  const database = await openDatabase();
+  try {
+    const store = database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
+    await idbRequest(store.delete(from));
+    await idbRequest(store.put(moved));
+  } finally {
+    database.close();
+  }
+  const oldUrl = objectUrls.get(from);
+  if (oldUrl) URL.revokeObjectURL(oldUrl);
+  objectUrls.delete(from);
+  cacheObjectUrl(moved);
+  return true;
+}
+
 export async function reassignDraftAssets(from: string, to: string): Promise<void> {
   const assets = await draftAssetsForNote(from);
   if (!assets.length) return;

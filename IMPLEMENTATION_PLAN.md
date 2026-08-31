@@ -4,7 +4,7 @@
 > Quy ước: `[ ]` chưa làm · `[~]` đang làm · `[x]` xong.
 > Cập nhật file này **mỗi khi** một mục thay đổi trạng thái.
 
-Cập nhật lần cuối: 2026-08-29 (Phase 31 — contribution workspace trước khi sửa đã hoàn thành)
+Cập nhật lần cuối: 2026-08-31 (Phase 32 — reveal current file + contribution tree move đã hoàn thành)
 
 ---
 
@@ -443,7 +443,25 @@ Cập nhật lần cuối: 2026-08-29 (Phase 31 — contribution workspace trư�
 - [x] M31.3 Khóa target trong dialog gửi bài, hiển thị/switch workspace ở status bar và giữ local draft đúng context.
 - [x] M31.4 Test integration Cloudflare + web, typecheck, contribution build và preview smoke.
 
+## Phase 32 — Reveal current file + contribution tree move — FR-16, PRD 1.8
+- [x] M32.1 Thay menu cuối toolbar Files bằng Auto reveal current file theo thứ tự Obsidian;
+      bật/tắt follow active path, expand ancestor, scroll và highlight active row.
+- [x] M32.2 Move file/folder bằng drag/drop trong contribution mode; local note/asset và mọi path UI
+      cập nhật tức thì, root drop giữ prefix `docs`.
+- [x] M32.3 Persist move theo contribution workspace; source-path mapping giữ đọc Markdown/image ở
+      vị trí mới trước submit.
+- [x] M32.4 Validate `moves` server-side và tạo Git tree delete/add bằng blob SHA atomically khi
+      create/update PR; không mở public rename endpoint.
+- [x] M32.5 Web/Netlify/Cloudflare tests, typecheck, contribution build và browser smoke.
+
 ### Nhật ký tiến độ
+- 2026-08-31 (Phase 32 — reveal + contribution tree move): toolbar Files nay là New note / New folder /
+  Sort / Auto reveal current file / Collapse, khớp Obsidian; browser smoke xác nhận folder đóng được mở lại và
+  active note được scroll/highlight. Drag Welcome vào Notes cập nhật tree + open tab thành
+  `Notes/Welcome.md` ngay. Contribution move được lưu theo workspace và submit thành Git tree commit
+  delete-old/add-new, reuse blob SHA cho cả folder descendants; path/collision/source đều validate.
+  Verify: 14 web + 24 Netlify + 20 Cloudflare tests pass; web/server/Netlify/Cloudflare typecheck sạch;
+  contribution build sạch; visual verdict 94/100.
 - 2026-08-29 (Phase 31 — contribution workspace trước khi chỉnh sửa): mở Markdown nay kiểm tra PR mở
   liên quan trước khi bật chỉnh sửa; người dùng chọn tiếp tục PR hiện có hoặc tạo workspace mới từ
   `contributions`. Tree, Markdown và ảnh của workspace hiện có được đọc từ head branch đã xác minh;

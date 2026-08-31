@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api, type TreeNode, type ShareRecord } from './api';
-import { addDraftAssetToTree, addDraftNoteToTree, findNode, resolveWikilinkPath } from './tree';
+import { addDraftAssetToTree, addDraftNoteToTree, findNode, moveTreeNode, resolveWikilinkPath } from './tree';
 import {
   forgetCreatedNote,
   loadCreatedNotes,
@@ -12,6 +12,7 @@ import {
 import { contributionMode } from './mode';
 import { warmDraftAssetUrls } from './draftAssets';
 import { getContributionWorkspace } from './contributionWorkspace';
+import { loadContributionMoves } from './contributionMoves';
 
 /** Per-tab id so we can ignore the echo of our own server-pushed state change. */
 export const CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -335,6 +336,9 @@ export const useStore = create<AppState>()(
       loadTree: async () => {
         let tree = await api.tree();
         if (contributionMode) {
+          for (const move of loadContributionMoves()) {
+            tree = moveTreeNode(tree, move.from, move.to);
+          }
           for (const path of loadCreatedNotes()) {
             if (loadDraft(path) === null) {
               forgetCreatedNote(path);

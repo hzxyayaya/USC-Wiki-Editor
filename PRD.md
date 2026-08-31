@@ -1,7 +1,13 @@
 # PRD — WebObsidian
 
 > Product Requirements Document
-> Phiên bản: 1.7 · Cập nhật: 2026-08-29 · Trạng thái: Draft
+> Phiên bản: 1.8 · Cập nhật: 2026-08-31 · Trạng thái: Draft
+> Changelog 1.8 (FR-16 — reveal + move trong contribution tree): toolbar Files thay
+> menu thừa bằng toggle “Auto reveal current file”, mở ancestor, cuộn tới tài liệu hiện tại
+> ngay khi bật và tiếp tục theo dõi khi active file thay đổi.
+> Kéo-thả file/folder trong contribution mode cập nhật tree/draft ngay trên browser và gửi
+> move operation cùng lần create/update PR; Worker dùng Git tree SHA để move atomically,
+> không mở API rename công khai và không ghi trực tiếp vào staging/main.
 > Changelog 1.7 (FR-15 — contribution workspace trước khi sửa): PR không còn là đích được
 > “liên kết” lúc gửi bài. Khi mở Markdown trong chế độ投稿, editor kiểm tra PR đang mở trước,
 > chặn chỉnh sửa cho tới khi người dùng chọn tạo投稿 mới từ `contributions` hoặc tiếp tục một
@@ -447,6 +453,21 @@ Express + SPA hiện có (không fork code, không đổi kiến trúc) — nên
 - Dialog gửi bài không cho liên kết hay đổi PR. Workspace mới tạo branch + PR; workspace hiện có chỉ
   cập nhật branch/PR đã chọn. Status bar luôn hiển thị ngữ cảnh và cho phép “切换投稿”.
 - Khi PR merge/close, workspace được giải phóng; quy tắc dọn hoặc giữ local draft hiện có tiếp tục áp dụng.
+
+### FR-16 · Reveal và kéo-thả trong contribution tree
+
+- Toolbar Files theo thứ tự Obsidian: new note, new folder, sort, **Auto reveal current file**,
+  collapse/expand. Khi bật, action mở toàn bộ ancestor, cuộn row vào giữa panel, giữ active highlight
+  và lặp lại mỗi khi active file thay đổi; click lần nữa để tắt.
+- File và folder có thể kéo vào folder khác, lên một file (dùng parent folder), hoặc vùng trống của
+  visible vault root. Không cho move vào chính nó/con của nó hoặc ghi đè target cùng tên.
+- Trong contribution mode, move là draft operation theo workspace. Tree, tab, active path, recent,
+  bookmark và expanded path cập nhật ngay; đọc Markdown/ảnh ở path mới vẫn resolve về source path
+  cho tới khi submit.
+- Submit gửi `moves: {from,to}[]`. Backend chỉ nhận path bên trong `docs/`, xác minh source blob/tree
+  tồn tại ở base tree của staging hoặc PR head, chặn collision, rồi tạo delete-old/add-new entries
+  bằng cùng blob SHA trong một Git commit. Folder move áp dụng cho mọi blob con.
+- Move không mở `/api/files/rename` trong public deployment; thay đổi chỉ xuất hiện trong PR.
 
 ---
 

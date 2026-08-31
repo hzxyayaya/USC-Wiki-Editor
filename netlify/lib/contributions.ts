@@ -2,6 +2,7 @@ import type { CreateContributionInput } from './github.js';
 import {
   assertWritableContributionImagePath,
   assertWritableMarkdownPath,
+  assertContributionMovePath,
   isMarkdownPath,
 } from './paths.js';
 
@@ -14,6 +15,7 @@ interface RawContributionInput {
   title?: unknown;
   contributor?: { name?: unknown };
   files?: Array<{ path?: unknown; content?: unknown; encoding?: unknown }>;
+  moves?: Array<{ from?: unknown; to?: unknown }>;
   branch?: unknown;
 }
 
@@ -65,6 +67,34 @@ export function validateContributionInput(raw: RawContributionInput): CreateCont
     throw new Error('A contribution must include at least one Markdown document');
   }
 
+  const rawMoves = raw.moves ?? [];
+  if (!Array.isArray(rawMoves) || rawMoves.length > 100) {
+    throw new Error('moves must contain at most 100 items');
+  }
+  const moveSources = new Set<string>();
+  const moveTargets = new Set<string>();
+  const moves = rawMoves.map((move) => {
+    if (typeof move.from !== 'string' || typeof move.to !== 'string') {
+      throw new Error('Each move requires string from and to paths');
+    }
+    const from = assertContributionMovePath(move.from);
+    const to = assertContributionMovePath(move.to);
+    if (from === to) throw new Error('Move paths must be different');
+    if (to.startsWith(`${from}/`)) throw new Error('A folder cannot be moved inside itself');
+    const sourceKey = from.toLowerCase();
+    const targetKey = to.toLowerCase();
+    if (moveSources.has(sourceKey)) throw new Error(`Duplicate move source: ${from}`);
+    if (moveTargets.has(targetKey)) throw new Error(`Duplicate move target: ${to}`);
+    for (const source of moveSources) {
+      if (source.startsWith(`${sourceKey}/`) || sourceKey.startsWith(`${source}/`)) {
+        throw new Error(`Move sources cannot overlap: ${from}`);
+      }
+    }
+    moveSources.add(sourceKey);
+    moveTargets.add(targetKey);
+    return { from, to };
+  });
+
   let branch: string | undefined;
   if (raw.branch !== undefined) {
     if (typeof raw.branch !== 'string' || !/^contrib\/\d{8}-[a-f0-9]{8}$/.test(raw.branch)) {
@@ -73,7 +103,13 @@ export function validateContributionInput(raw: RawContributionInput): CreateCont
     branch = raw.branch;
   }
 
-  return { title, contributorName, files, ...(branch ? { branch } : {}) };
+  return {
+    title,
+    contributorName,
+    files,
+    ...(moves.length ? { moves } : {}),
+    ...(branch ? { branch } : {}),
+  };
 }
 
 export function createContributionBranch(

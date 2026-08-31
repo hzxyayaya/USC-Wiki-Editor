@@ -143,4 +143,13 @@ test('validates contribution file and folder moves inside docs', () => {
     files: [{ path: 'docs/a.md', content: 'a' }],
     moves: [{ from: 'docs/a.md', to: 'docs/a.md' }],
   }), /different/);
+  assert.throws(() => validateContributionInput({
+    title: '重叠移动',
+    contributor: { name: 'Lucas' },
+    files: [{ path: 'docs/a.md', content: 'a' }],
+    moves: [
+      { from: 'docs/旧目录', to: 'docs/新目录' },
+      { from: 'docs/旧目录/a.md', to: 'docs/其他/a.md' },
+    ],
+  }), /overlap/);
 });

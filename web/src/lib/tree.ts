@@ -60,6 +60,54 @@ export function pruneDescendants(paths: string[]): string[] {
   return keep;
 }
 
+function rewriteNodePath(node: TreeNode, from: string, to: string): TreeNode {
+  const path = node.path === from ? to : `${to}${node.path.slice(from.length)}`;
+  return {
+    ...node,
+    name: path.slice(path.lastIndexOf('/') + 1),
+    path,
+    children: node.children?.map((child) => rewriteNodePath(child, from, to)),
+  };
+}
+
+/** Move one file/folder in an immutable tree and rewrite descendant paths. */
+export function moveTreeNode(root: TreeNode, from: string, to: string): TreeNode {
+  if (!from || !to || from === to || to.startsWith(`${from}/`) || findNode(root, to)) return root;
+  const source = from === root.path ? root : findNode(root, from);
+  const targetParentPath = to.slice(0, to.lastIndexOf('/'));
+  const targetParent = targetParentPath === root.path ? root : findNode(root, targetParentPath);
+  if (!source || source === root || targetParent?.type !== 'folder') return root;
+
+  let detached = false;
+  const detach = (node: TreeNode): TreeNode => {
+    if (!node.children) return node;
+    const children = node.children.filter((child) => {
+      if (child.path !== from) return true;
+      detached = true;
+      return false;
+    }).map(detach);
+    return children.length === node.children.length
+      && children.every((child, index) => child === node.children?.[index])
+      ? node
+      : { ...node, children };
+  };
+  const withoutSource = detach(root);
+  if (!detached) return root;
+
+  const moved = rewriteNodePath(source, from, to);
+  const attach = (node: TreeNode): TreeNode => {
+    if (node.path === targetParentPath && node.type === 'folder') {
+      return { ...node, children: [...(node.children ?? []), moved] };
+    }
+    if (!node.children) return node;
+    const children = node.children.map(attach);
+    return children.some((child, index) => child !== node.children?.[index])
+      ? { ...node, children }
+      : node;
+  };
+  return attach(withoutSource);
+}
+
 function addChildToFolder(root: TreeNode, parentPath: string, child: TreeNode): TreeNode {
   if (findNode(root, child.path)) return root;
   let added = false;

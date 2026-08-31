@@ -132,8 +132,10 @@ export const api = {
 
   // files
   tree: () => req<TreeNode>(workspaceUrl('/api/files/')),
-  read: (path: string) =>
-    req<{ path: string; content: string }>(workspaceUrl('/api/files/content', { path })),
+  read: (path: string) => {
+    const sourcePath = resolveMovedSourcePath(path, loadContributionMoves());
+    return req<{ path: string; content: string }>(workspaceUrl('/api/files/content', { path: sourcePath }));
+  },
   write: (path: string, content: string) =>
     req<{ ok: true }>('/api/files/content', { method: 'PUT', body: JSON.stringify({ path, content }) }),
   createFolder: (path: string) =>
@@ -166,13 +168,17 @@ export const api = {
     if (!res.ok) throw new ApiError((await res.json().catch(() => ({}))).error ?? 'Upload failed', res.status);
     return res.json() as Promise<{ ok: true; path: string; size: number }>;
   },
-  rawUrl: (path: string) => workspaceUrl('/api/files/content', { path }),
+  rawUrl: (path: string) => {
+    const sourcePath = resolveMovedSourcePath(path, loadContributionMoves());
+    return workspaceUrl('/api/files/content', { path: sourcePath });
+  },
 
   // contribution review
   submitContribution: (input: {
     title: string;
     contributor: { name: string };
     files: { path: string; content: string; encoding?: 'base64' }[];
+    moves?: { from: string; to: string }[];
     branch?: string;
   }) =>
     req<ContributionResult>('/api/contributions', {
@@ -281,3 +287,4 @@ export const api = {
     req<{ ok: true }>(`/api/plugins/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
 };
 import { getContributionWorkspaceBranch } from './contributionWorkspace';
+import { loadContributionMoves, resolveMovedSourcePath } from './contributionMoves';

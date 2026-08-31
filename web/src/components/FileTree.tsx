@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, type TreeSort } from '../lib/store';
 import { api, type TreeNode } from '../lib/api';
-import { findNode, pruneDescendants } from '../lib/tree';
+import { findNode, moveTreeNode, pruneDescendants } from '../lib/tree';
 import { pathToUrl } from '../lib/urlsync';
 import { contributionMode } from '../lib/mode';
 import {
@@ -15,10 +15,12 @@ import Icon from './Icon';
 import {
   draftAssetUrl,
   getDraftAsset,
+  moveDraftAsset,
   reassignDraftAssets,
   removeDraftAsset,
   removeDraftAssets,
 } from '../lib/draftAssets';
+import { recordContributionMove } from '../lib/contributionMoves';
 
 /** Inline rename box shown in place of a tree row's name (Obsidian-style). */
 function RenameInput({ node, onDone }: { node: TreeNode; onDone: () => void }) {
@@ -116,7 +118,7 @@ function readDragPaths(e: React.DragEvent): string[] {
 
 /** Move every path into targetDir ('' = vault root). Skips no-ops and self/descendant moves. */
 async function moveItemsTo(paths: string[], targetDir: string): Promise<void> {
-  const { closeTab, loadTree, setSelected, notify } = useStore.getState();
+  const { closeTab, loadTree, save, setSelected, notify } = useStore.getState();
   let moved = 0;
   for (const from of pruneDescendants(paths)) {
     if (!from) continue;
@@ -125,15 +127,71 @@ async function moveItemsTo(paths: string[], targetDir: string): Promise<void> {
     if (to === from) continue; // already there
     if (targetDir === from || targetDir.startsWith(`${from}/`)) continue; // into self/descendant
     try {
-      await api.rename(from, to);
-      closeTab(from);
+      const state = useStore.getState();
+      if (findNode(state.tree, to)) throw new Error('目标目录中已经存在同名项目');
+      if (contributionMode) {
+        if (state.dirty && state.activePath
+          && (state.activePath === from || state.activePath.startsWith(`${from}/`))) {
+          await save();
+        }
+        const source = findNode(useStore.getState().tree, from);
+        if (!source) throw new Error('找不到要移动的项目');
+        const files: TreeNode[] = [];
+        const stack = [source];
+        while (stack.length) {
+          const item = stack.pop()!;
+          if (item.type === 'file') files.push(item);
+          else stack.push(...(item.children ?? []));
+        }
+        let hasRemoteFiles = false;
+        for (const file of files) {
+          const destination = `${to}${file.path.slice(from.length)}`;
+          if (isCreatedNote(file.path)) {
+            if (!moveCreatedNote(file.path, destination)) throw new Error('无法移动本地新文档');
+            await reassignDraftAssets(file.path, destination);
+          } else if (draftAssetUrl(file.path)) {
+            const asset = await getDraftAsset(file.path);
+            const notePath = asset?.notePath
+              && (asset.notePath === from || asset.notePath.startsWith(`${from}/`))
+              ? `${to}${asset.notePath.slice(from.length)}`
+              : asset?.notePath;
+            if (!await moveDraftAsset(file.path, destination, notePath)) {
+              throw new Error('无法移动本地附件');
+            }
+          } else {
+            hasRemoteFiles = true;
+          }
+        }
+        if (hasRemoteFiles) recordContributionMove({ from, to });
+        const remap = (path: string) => path === from || path.startsWith(`${from}/`)
+          ? `${to}${path.slice(from.length)}`
+          : path;
+        useStore.setState((current) => ({
+          tree: current.tree ? moveTreeNode(current.tree, from, to) : current.tree,
+          tabs: current.tabs.map((tab) => {
+            const path = remap(tab.path);
+            return path === tab.path ? tab : { path, title: path.split('/').pop() ?? path };
+          }),
+          activePath: current.activePath ? remap(current.activePath) : null,
+          splitPath: current.splitPath ? remap(current.splitPath) : null,
+          recent: current.recent.map(remap),
+          bookmarks: current.bookmarks.map(remap),
+          expanded: current.expanded.map(remap),
+          selected: current.selected.map(remap),
+          selectAnchor: current.selectAnchor ? remap(current.selectAnchor) : null,
+          renamingPath: current.renamingPath ? remap(current.renamingPath) : null,
+        }));
+      } else {
+        await api.rename(from, to);
+        closeTab(from);
+      }
       moved++;
     } catch (err: any) {
       notify(err?.message ?? 'Move failed');
     }
   }
   setSelected([]);
-  await loadTree();
+  if (!contributionMode) await loadTree();
   if (moved > 1) notify(`Moved ${moved} items`);
 }
 
@@ -475,7 +533,7 @@ function Node({ node, depth }: { node: TreeNode; depth: number }) {
         className={`tree-row ${activePath === node.path ? 'active' : ''} ${isSelected ? 'selected' : ''} ${dropping ? 'drop-target' : ''}`}
         style={isCut ? { opacity: 0.5 } : undefined}
         data-path={node.path}
-        draggable={!isLocalCreatedNote && !isLocalDraftAsset}
+        draggable
         onDragStart={onDragStart}
         onClick={onRowClick}
         onContextMenu={onContext}
@@ -603,9 +661,11 @@ export default function FileTree() {
       }));
       return;
     }
-    // Drop on the empty area = move to the vault root. Only nested items move.
-    const paths = readDragPaths(e).filter((p) => p.includes('/'));
-    if (paths.length) await moveItemsTo(paths, '');
+    // Drop on the empty area = move to the visible vault root. Contribution
+    // mode hoists docs/ as that root, so never strip the required docs prefix.
+    const rootPath = rawTree?.path ?? '';
+    const paths = readDragPaths(e).filter((p) => parentDir(p) !== rootPath);
+    if (paths.length) await moveItemsTo(paths, rootPath);
   };
 
   // Paste into the vault root (right-click on the empty area of the file tree).

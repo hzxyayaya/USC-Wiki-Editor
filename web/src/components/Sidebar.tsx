@@ -17,15 +17,15 @@ export default function Sidebar() {
   const leftPanel = useStore((s) => s.leftPanel);
   const setLeftPanel = useStore((s) => s.setLeftPanel);
   const newNote = useStore((s) => s.newNote);
-  const newCanvas = useStore((s) => s.newCanvas);
   const newFolder = useStore((s) => s.newFolder);
   const setSettings = useStore((s) => s.setSettings);
-  const setTrash = useStore((s) => s.setTrash);
   const tree = useStore((s) => s.tree);
   const expanded = useStore((s) => s.expanded);
   const setExpanded = useStore((s) => s.setExpanded);
   const treeSort = useStore((s) => s.treeSort);
   const setTreeSort = useStore((s) => s.setTreeSort);
+  const activePath = useStore((s) => s.activePath);
+  const revealInTree = useStore((s) => s.revealInTree);
   const autoReveal = useStore((s) => s.autoReveal);
   const toggleAutoReveal = useStore((s) => s.toggleAutoReveal);
   const openContextMenu = useStore((s) => s.openContextMenu);
@@ -86,24 +86,6 @@ export default function Sidebar() {
     });
   };
 
-  const openMoreMenu = (e: React.MouseEvent) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    openContextMenu({
-      x: r.left,
-      y: r.bottom + 4,
-      items: [
-        { label: 'New canvas', icon: 'layout-dashboard', onClick: () => newCanvas() },
-        {
-          label: autoReveal ? 'Disable auto reveal' : 'Enable auto reveal',
-          icon: autoReveal ? 'check' : 'crosshair',
-          onClick: () => toggleAutoReveal(),
-        },
-        { label: '', separator: true },
-        { label: 'Trash', icon: 'trash', onClick: () => setTrash(true) },
-      ],
-    });
-  };
-
   return (
     <div className="sidebar">
       <div className="sidebar-switcher" aria-label="Left sidebar panels">
@@ -131,14 +113,21 @@ export default function Sidebar() {
               <Icon name="arrow-up-narrow-wide" size={16} />
             </button>
             <button
+              className={`nav-action ${autoReveal ? 'active' : ''}`}
+              title="Auto reveal current file"
+              onClick={() => {
+                if (!autoReveal && activePath && activePath !== 'graph://view') revealInTree(activePath);
+                toggleAutoReveal();
+              }}
+            >
+              <Icon name="folder-open" size={16} />
+            </button>
+            <button
               className="nav-action"
               title={allCollapsed ? 'Expand all' : 'Collapse all'}
               onClick={toggleCollapseAll}
             >
               <Icon name={allCollapsed ? 'chevrons-up-down' : 'chevrons-down-up'} size={16} />
-            </button>
-            <button className="nav-action" title="More options" onClick={openMoreMenu}>
-              <Icon name="more-horizontal" size={16} />
             </button>
           </>
         )}

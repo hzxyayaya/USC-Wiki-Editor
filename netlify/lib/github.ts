@@ -27,10 +27,16 @@ export interface ContributionFile {
   encoding?: 'base64';
 }
 
+export interface ContributionMove {
+  from: string;
+  to: string;
+}
+
 export interface CreateContributionInput {
   title: string;
   contributorName: string;
   files: ContributionFile[];
+  moves?: ContributionMove[];
   branch?: string;
 }
 
@@ -55,8 +61,10 @@ async function contributionTreeEntries(
   config: EditorConfig,
   fork: (suffix: string) => string,
   files: ContributionFile[],
+  moves: ContributionMove[] = [],
+  baseEntries: GitHubTreeEntry[] = [],
 ): Promise<Array<Record<string, string>>> {
-  return Promise.all(files.map(async (file) => {
+  const writes = await Promise.all(files.map(async (file) => {
     const base = { path: file.path, mode: '100644', type: 'blob' };
     if (file.encoding !== 'base64') return { ...base, content: file.content };
     const blob = await githubJson<{ sha: string }>(config, fork('/git/blobs'), {
@@ -65,16 +73,52 @@ async function contributionTreeEntries(
     });
     return { ...base, sha: blob.sha };
   }));
+  if (!moves.length) return writes;
+
+  const written = new Set(files.map((file) => file.path.toLowerCase()));
+  const movingSources = new Set<string>();
+  for (const move of moves) {
+    for (const entry of baseEntries) {
+      if (entry.type === 'blob' && (entry.path === move.from || entry.path.startsWith(`${move.from}/`))) {
+        movingSources.add(entry.path.toLowerCase());
+      }
+    }
+  }
+  const entries: Array<Record<string, string | null>> = [];
+  for (const move of moves) {
+    const sources = baseEntries.filter(
+      (entry) => entry.type === 'blob'
+        && (entry.path === move.from || entry.path.startsWith(`${move.from}/`)),
+    );
+    if (!sources.length) throw new Error(`Move source does not exist: ${move.from}`);
+    for (const source of sources) {
+      const target = `${move.to}${source.path.slice(move.from.length)}`;
+      const occupied = baseEntries.some(
+        (entry) => entry.path.toLowerCase() === target.toLowerCase()
+          && !movingSources.has(entry.path.toLowerCase()),
+      );
+      if (occupied) throw new Error(`Move target already exists: ${target}`);
+      entries.push({ path: source.path, sha: null });
+      if (!written.has(target.toLowerCase())) {
+        entries.push({ path: target, mode: source.mode, type: 'blob', sha: source.sha });
+      }
+    }
+  }
+  return [...entries, ...writes] as Array<Record<string, string>>;
 }
 
 function pullBody(config: EditorConfig, input: CreateContributionInput, branch: string): string {
-  const fileMarker = encodeURIComponent(JSON.stringify(input.files.map((file) => file.path)));
+  const changedPaths = [
+    ...input.files.map((file) => file.path),
+    ...(input.moves ?? []).flatMap((move) => [move.from, move.to]),
+  ];
+  const fileMarker = encodeURIComponent(JSON.stringify([...new Set(changedPaths)]));
   return [
     '由 USC-Wiki 网页投稿编辑器创建。',
     '',
     `实际投稿人：${input.contributorName}`,
     `投稿分支：\`${config.forkOwner}:${branch}\``,
-    `投稿文件：${input.files.map((file) => `\`${file.path}\``).join('、')}`,
+    `投稿文件：${[...new Set(changedPaths)].map((path) => `\`${path}\``).join('、')}`,
     '',
     '审核通过后请合并到 `contributions`；本 PR 不直接进入 `main`。',
     '',
@@ -325,6 +369,13 @@ export async function createContribution(
     },
   );
 
+  const baseEntries = input.moves?.length
+    ? (await githubJson<GitHubTreeResponse>(
+        config,
+        upstream(`/git/trees/${encodeURIComponent(baseCommit.tree.sha)}?recursive=1`),
+      )).tree
+    : [];
+
   const tree = await githubJson<{ sha: string }>(
     config,
     fork('/git/trees'),
@@ -332,7 +383,7 @@ export async function createContribution(
       method: 'POST',
       body: JSON.stringify({
         base_tree: baseCommit.tree.sha,
-        tree: await contributionTreeEntries(config, fork, input.files),
+        tree: await contributionTreeEntries(config, fork, input.files, input.moves, baseEntries),
       }),
     },
   );
@@ -412,11 +463,17 @@ export async function updateContribution(
     config,
     fork(`/git/commits/${encodeURIComponent(headSha)}`),
   );
+  const baseEntries = input.moves?.length
+    ? (await githubJson<GitHubTreeResponse>(
+        config,
+        fork(`/git/trees/${encodeURIComponent(headCommit.tree.sha)}?recursive=1`),
+      )).tree
+    : [];
   const tree = await githubJson<{ sha: string }>(config, fork('/git/trees'), {
     method: 'POST',
     body: JSON.stringify({
       base_tree: headCommit.tree.sha,
-      tree: await contributionTreeEntries(config, fork, input.files),
+      tree: await contributionTreeEntries(config, fork, input.files, input.moves, baseEntries),
     }),
   });
   const commit = await githubJson<{ sha: string }>(config, fork('/git/commits'), {
