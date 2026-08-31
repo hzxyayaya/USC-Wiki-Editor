@@ -480,8 +480,8 @@ export const useStore = create<AppState>()(
       shares: [],
       loadShares: async () => {
         try {
-          const { shares } = await api.listShares();
-          set({ shares });
+          const response = await api.listShares();
+          set({ shares: Array.isArray(response?.shares) ? response.shares : [] });
         } catch {
           /* not authed yet */
         }
